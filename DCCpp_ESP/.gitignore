@@ -4,3 +4,7 @@ Release/*
 .piolibdeps
 .clang_complete
 .gcc-flags.json
+.pio
+CMakeLists*
+.idea
+**/WifiSettings.h

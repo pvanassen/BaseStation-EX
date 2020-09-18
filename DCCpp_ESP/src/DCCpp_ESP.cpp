@@ -13,6 +13,7 @@
 #include <ArduinoJson.h>
 #include <AsyncJson.h>
 #include <StringArray.h>
+#include <ESP8266WiFiMulti.h>
 #include "config.h"
 #include "Queue.h"
 #include "PowerDistrict.h"
@@ -20,9 +21,11 @@
 #include "Output.h"
 #include "Turnout.h"
 #include "ProgramRequest.h"
+#include "WifiSettings.h"
 
 #define UNUSED(x) (void)(x)
 
+ESP8266WiFiMulti WiFiMulti;
 WiFiServer DCCppServer(DCCPP_CLIENT_PORT);
 WiFiClient DCCppClients[MAX_DCCPP_CLIENTS];
 AsyncWebServer webServer(80);
@@ -477,8 +480,65 @@ void handleSensors(AsyncWebServerRequest *request) {
 void setup() {
 	SPIFFS.begin();
 
-	WiFi.setAutoConnect(false);
-	WiFi.hostname(HOSTNAME);
+    WiFi.mode(WIFI_STA);
+    WiFi.hostname(HOSTNAME);
+
+    WiFiMulti.addAP(STASSID, STAPSK);
+
+    SERIAL_LINK_DEV.begin(SERIAL_LINK_SPEED);
+
+    SERIAL_LINK_DEV.println();
+    SERIAL_LINK_DEV.println("Wait for WiFi... ");
+
+    for (int i=0;i!=10;i++) {
+        if (WiFiMulti.run() == WL_CONNECTED) {
+            break;
+        }
+        SERIAL_LINK_DEV.print(".");
+        delay(500);
+    }
+    if (WiFiMulti.run() != WL_CONNECTED) {
+        SERIAL_LINK_DEV.print("No connection. Restarting");
+        ESP.restart();
+    }
+
+    SERIAL_LINK_DEV.println("");
+    SERIAL_LINK_DEV.println("WiFi connected");
+    SERIAL_LINK_DEV.println("IP address: ");
+    SERIAL_LINK_DEV.println(WiFi.localIP());
+
+    ArduinoOTA.onStart([]() {
+        String type;
+        if (ArduinoOTA.getCommand() == U_FLASH) {
+            type = "sketch";
+        } else { // U_FS
+            type = "filesystem";
+        }
+
+        // NOTE: if updating FS this would be the place to unmount FS using FS.end()
+        SERIAL_LINK_DEV.println("Start updating " + type);
+    });
+    ArduinoOTA.onEnd([]() {
+        SERIAL_LINK_DEV.println("\nEnd");
+    });
+    ArduinoOTA.onProgress([](unsigned int progress, unsigned int total) {
+        SERIAL_LINK_DEV.printf("Progress: %u%%\n", (progress / (total / 100)));
+    });
+    ArduinoOTA.onError([](ota_error_t error) {
+        SERIAL_LINK_DEV.printf("Error[%u]: ", error);
+        if (error == OTA_AUTH_ERROR) {
+            SERIAL_LINK_DEV.println("Auth Failed");
+        } else if (error == OTA_BEGIN_ERROR) {
+            SERIAL_LINK_DEV.println("Begin Failed");
+        } else if (error == OTA_CONNECT_ERROR) {
+            SERIAL_LINK_DEV.println("Connect Failed");
+        } else if (error == OTA_RECEIVE_ERROR) {
+            SERIAL_LINK_DEV.println("Receive Failed");
+        } else if (error == OTA_END_ERROR) {
+            SERIAL_LINK_DEV.println("End Failed");
+        }
+    });
+    ArduinoOTA.begin();
 
 	currentDCCppCommand.reserve(128);
 
@@ -497,6 +557,7 @@ void setup() {
 	webServer.on("/dccpp/outputs",
 			HTTP_GET | HTTP_POST | HTTP_DELETE | HTTP_PUT, &handleOutputs);
 	webServer.onNotFound(&handleNotFound);
+    webServer.begin();
 
 	DCCppServer.setNoDelay(true);
 
@@ -506,12 +567,12 @@ void setup() {
 	//MDNS.addService("_withrottle", "tcp", 81);
 	//MDNS.addServiceTxt("_withrottle", "tcp", "jmri", "4.5.7");
 
-	SERIAL_LINK_DEV.begin(SERIAL_LINK_SPEED);
 	SERIAL_LINK_DEV.flush();
 	SERIAL_LINK_DEV.println(F("<iESP-DCC++ init>"));
 }
 
 void loop() {
+    ArduinoOTA.handle();
 	taskScheduler.execute();
 	if (DCCppServer.status() == LISTEN) {
 		if (DCCppServer.hasClient()) {
